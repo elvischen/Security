@@ -34,6 +34,51 @@
 
 int checksum = 0;
 int encryption = 0;
+
+/*
+ * die() - print an error and exit the program
+ */
+void die(const char *msg1, char *msg2) {
+    fprintf(stderr, "%s, %s\n", msg1, msg2);
+    exit(0);
+}
+
+/* encrypt message */
+char * my_encrypt(char * content){ 
+  RSA* key;
+  int result,key_size;
+  FILE * key_file = fopen("public.pem","r");
+  if(!key_file) die("public.pem","cannot open key file");
+  key = PEM_read_RSA_PUBKEY(key_file,NULL,NULL,NULL);
+  if(!key) die("cannot read key","terminating");
+  // encrypt data
+  key_size = RSA_size(key);
+  char * encrypt_msg = malloc(key_size+1);
+  bzero(encrypt_msg,key_size+1);
+  result = RSA_public_encrypt(key_size,(unsigned char*)content,(unsigned char*)encrypt_msg,key,RSA_NO_PADDING);
+  if(result<0) die("enrypt wrong","terminating");
+  fclose(key_file);
+  RSA_free(p_rsa);
+  return encrypt_msg;
+}
+
+char * decrypt(char* content){
+  RSA* key;
+  int result;key_size;
+  FILE * key_file = fopen("private.pem","r");
+  if(!key_file) die("private.pem","cannot open key file");
+  key = PEM_read_RSAPrivateKey(key_file,NULL,NULL,NULL);
+  if(!key) die("cannot read key","terminating");
+  // decrypt data
+  key_size = RSA_size(key);
+  char * decrypt_msg = malloc(key_size+1);
+  bzero(encrypt_msg,key_size+1);
+  result = RSA_private_decrypt(key_size,(unsigned char*)content,(unsigned char*)decrypt_msg,key,RSA_NO_PADDING);
+  if(result<0) die("enrypt wrong","terminating");
+  fclose(key_file);
+  RSA_free(p_rsa);
+  return decrypt_msg;
+}
 /*
  * help() - Print a help message
  */
@@ -49,13 +94,6 @@ void help(char *progname) {
     printf("  -S    for GETs, name to use when saving file locally\n");
 }
 
-/*
- * die() - print an error and exit the program
- */
-void die(const char *msg1, char *msg2) {
-    fprintf(stderr, "%s, %s\n", msg1, msg2);
-    exit(0);
-}
 
 /*
  * connect_to_server() - open a connection to the server specified by the
@@ -150,7 +188,7 @@ void echo_client(int fd) {
 }
 
 char* create_checksum(char * content){
-  printf("string: %s\n",content);
+  //printf("string: %s\n",content);
   char *out = (char*)malloc(33);bzero(out,33);
   int n = 0;
   unsigned char digest[MD5_DIGEST_LENGTH];
@@ -181,24 +219,43 @@ void put_file(int fd, char *put_name) {
   FILE *file = fopen(put_name,"r");
   if(!file) die("open file failed","cannot read file");
   write(fd,put_name,256);
-  printf("%s\n",put_name);
+  printf("file name: %s\n",put_name);
   fseek(file,0,SEEK_END);
   int length = ftell(file);  // find length of sending FILE
   fseek(file,0,SEEK_SET);  
-  printf("%d\n",length);
+  printf("file size: %d\n",length);
   char len[256];bzero(len,256);
   sprintf(len,"%d",length);
   write(fd,len,256);        // write LENGTH
   char buffer[1024];bzero(buffer,1024);
-  fgets(buffer,sizeof(buffer),file);
-  strcpy(str,buffer);
+  fgets(buffer,sizeof(buffer),file); // read file
+  strcpy(str,buffer); // copy to buffer
   while(fgets(buffer,sizeof(buffer),file)){
     strcat(str,buffer);
   }
+  if(encryption){
+  // encrypt str
+    char encrypt_str[8192]; bzero(encrypt_str);
+    strncpy(encrypt_str,my_encrypt(str));
+    if(checksum){
+      char sum[33];bzero(sum,33);
+      printf("encrypting file ...\n");
+      strncpy(sum,create_checksum(encrypt_str),33);
+      //printf("check sum: %s\n",sum);
+      write(fd,sum,33); // write check sum 
+    }
+    printf("encrypting file ...\n");
+    write(fd,encrypt_str,8192);    // write FILE content
+    fclose(file);  // close file
+    char response[10];
+    read(fd,response,10);   // read RESPONSE
+    printf("%s\n",response);
+  } 
+  else {    // normal no encryption 
   if(checksum){
     char sum[33];bzero(sum,33);
     strncpy(sum,create_checksum(str),33);
-    printf("check sum: %s\n",sum);
+    //printf("check sum: %s\n",sum);
     write(fd,sum,33); // write check sum 
   }
   write(fd,str,8192);    // write FILE content
@@ -206,7 +263,7 @@ void put_file(int fd, char *put_name) {
   char response[10];
   read(fd,response,10);   // read RESPONSE
   printf("%s\n",response);
- 
+ }
 }
 /*
  * get_file() - get a file from the server accessible via the given socket
@@ -222,36 +279,60 @@ void get_file(int fd, char *get_name, char *save_name) {
     printf("GET\n");    
   }
   write(fd,get_name,256);    // write File Name
-  printf("%s\n",get_name);
+  printf("file name: %s\n",get_name);
   char response[10];bzero(response,10);
   read(fd,response,10);    // read OK
-  if(strcmp(response,"OK")||strcmp(response,"OKC"))   // if not OK die
-    die("didn't get file","server failed finding file");
+  printf("received: %s\n",response);
+  if(checksum){
+    if(strcmp(response,"OKC"))
+      die(get_name,"server failed finding file");
+  } else{
+    if(strcmp(response,"OK"))   // if not OK die
+      die("didn't get file","server failed finding file");
+  }
   char length[256];bzero(length,256);
   read(fd,length,256);   // read file size
-  printf("%s\n",length);
+  printf("file size: %s\n",length);
   int size = atoi(length);
-  char buffer[size];bzero(buffer,size);
+  char buffer[size];bzero(buffer,size+3);
+  char decrypt_str[size];bzero(decrypt_str); // for encryption
   if(checksum){
     char read_sum[33]; bzero(read_sum,33);
     read(fd,read_sum,33);  // read CHECKSUM
-    printf("received checksum: %s\n",read_sum);
+    //printf("received checksum: %s\n",read_sum);
     read(fd,buffer,size);   // read FILE CONTENT
+    //printf("file contents: %s\n",buffer);
     char match_sum[33]; bzero(match_sum,33);
-    strncpy(match_sum,create_checksum(buffer),33);
-    printf("create checksum:%s\n",match_sum);
+
+    //------ decrypt received file
+    if(encryption){
+      printf("decrypting file ...\n");
+      strncpy(decrypt_str,my_encrypt(buffer));
+      strncpy(match_sum,create_checksum(decrypt_str),33);
+    }
+    else{
+      strncpy(match_sum,create_checksum(buffer),33);
+    }
+    //printf("create checksum:%s\n",match_sum);
     if(strcmp(read_sum,match_sum)){
       die("checksum doesn't match","rejecting file transmit");
     }
   } else{
-    read(fd,buffer,8192);  // read content
+    read(fd,buffer,size);  // read content
+    //------ decrypt received message
+    if(encryption){
+      printf("decrypting file ...\n");
+      char decrypt_str[size]; bzero(decrypt_str);
+      strncpy(decrypt_str,my_encrypt(buffer));
+    }
   }
+  if(checksum) printf("Checksum match\n");
   FILE *file = fopen(save_name,"w+");
   if(!file) die("failed to open file","cannot write to");
-  fprintf(file,"%s",buffer);
+  if(encryption) fprintf(file,"%s",decrypt_str);
+  else fprintf(file,"%s",buffer);
   fclose(file);
   printf("saved file: %s\n",save_name);
-
 }
 
 /*
@@ -285,7 +366,7 @@ int main(int argc, char **argv) {
 
     /* open a connection to the server */
     int fd = connect_to_server(server, port);
-    printf("check sums status: %d\n",checksum);
+    //printf("check sums status: %d\n",checksum);
     /* put or get, as appropriate */
     if (put_name)
         put_file(fd, put_name);

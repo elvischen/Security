@@ -23,7 +23,7 @@
 int lru_size = 0;
 int n = 0;
 int inCache = 0;
-
+void deque_LRU();
 /*
  *   LRU cache, each node represent a file
  */
@@ -58,6 +58,7 @@ lru_node * remove_LRU(char *file){
   return NULL;
 }
 
+/* search thtough list */
 lru_node * find_LRU(char *file){
   lru_node * current = head;
   while(current){
@@ -72,38 +73,44 @@ lru_node * find_LRU(char *file){
 void save_LRU(lru_node* nodefile){
   // if cache if full
   if(inCache>=lru_size) deque_LRU();
+  inCache++;
+  //printf("in save _ LRU \n");
   // else we append to the end
   lru_node * current = head; 
   if(head==NULL)   // if empty
     head = nodefile;  
-  while(current->next){  // go to next
-    current = current -> next;
+  else{
+    while(current->next){  // go to next
+      current = current -> next;
+    }
+    current->next = nodefile;
   }
-  inCache++;
-  current->next = nodefile;
+  //free(current);
 }
 
 /* free the node with least num of the list */
 void deque_LRU(){
+  // printf("call deque\n");
   lru_node * temp = head;
-  lru_node * min = NULL;
+  lru_node * min = temp;
   if(head == NULL) printf("empty LRU\n");
-  if(temp->next==NULL) min = temp;
-  while(temp->next){
-    if(temp->num < temp->next->num){ // temp num < next num
+  //if(temp->next==NULL) min = temp;
+  while(temp){
+    if(temp->num < min->num){ // temp num < next num
       min = temp;
     }
     temp = temp -> next;
   }    // find the min filename which is least used
+  printf("removed from cache: %s\n",min->filename);
   remove_LRU(min->filename);  // use find to deque 
-  free(min); free(temp);
 }
 
 /* print what is cache */
 void print_lru(){
   lru_node * current = head;
+  printf("-----   In lRU cache:\n");
   while(current){
-    printf("file:%s  lru:%d\n",current->filename,current->num);
+    printf("-----   file:%s  lru:%d\n",current->filename,current->num);
     current = current -> next;
   }
   free(current);
@@ -207,6 +214,7 @@ char * create_checksum(char * content){
   return out;
 }
 
+/* save to cache */
 void save_cache(char * name, char * file, int size){
   lru_node * new = malloc(sizeof(lru_node));
   new -> filename = malloc(strlen(name)+1);
@@ -214,25 +222,34 @@ void save_cache(char * name, char * file, int size){
   new -> length = size;
   n++;
   new -> num = n;
+  //printf("in here\n");
   strcpy(new->filename,name);
   strcpy(new->content,file);
   new -> next = NULL;
   save_LRU(new); 
 }
+
 /*
  * file_server() - Read a request from a socket, satisfy the request, and
  *                 then close the connection.
  */
 void file_server(int connfd, int lru_size) {
-  if(lru_size>0) file_cache(int connfd, int lru_size);
+  //printf("lru: %d\n",inCache); print_lru();
   char msg[10];bzero(msg,10);
   read(connfd, msg,10); // read PUT or GET
-  printf("Client send:%s",msg);
+  printf("Client send: %s",msg);
   char filename[256];bzero(filename,256);
   read(connfd,filename,256); // read file name
-  printf("File name:%s\n",filename);
+  printf("File name: %s\n",filename);
 
   if(strcmp(msg,"PUT\n")==0){    //       PUT 
+    /*if(lru_size){
+      lru_node * new = find_LRU(filename);
+      if(new){
+	printf("found in LRU cache");
+	return;
+      }
+      }*/
     char file_size[256];bzero(file_size,256);
     read(connfd,file_size,256); // read fize size
     int size = atoi(file_size);
@@ -245,8 +262,10 @@ void file_server(int connfd, int lru_size) {
     write(connfd,"OK",10);
     // save to lru cache
     if(lru_size) {
+      //printf("save attempt\n");
       save_cache(filename,buffer,size);
-      printf("save to LRU cache.\n")
+      //printf("save to LRU cache.\n");
+      print_lru();
     } else{
       printf("EOF. PUT complete. terminating connection\n"); exit(0);
     }
@@ -255,15 +274,16 @@ void file_server(int connfd, int lru_size) {
     // try find in cache
     if(lru_size){  // save to 
       lru_node * file_node = find_LRU(filename);
-      if(file_LRU){ // found in cache
+      if(file_node){ // found in cache
         n++;file_node->num = n;  // update num
         write(connfd,"OK",10); printf("OK found in cache\n");
         char size[256];
-        sprintf(size,"%d",length);  // cast LENGTH to char
+        sprintf(size,"%d",file_node->length);  // cast LENGTH to char
         write(connfd,size,256);    // write SIZE
         write(connfd,file_node->content,file_node->length); // write CONTENT
         printf("sending file from cache complete.");
       } else die(filename,"didn't find file in LRU cache. terminating.");
+      print_lru();
     }
     else{   // save to disk
       FILE * readfile = fopen(filename,"r");
@@ -295,15 +315,16 @@ void file_server(int connfd, int lru_size) {
     // read check sum
     char read_sum[33]; bzero(read_sum,33);
     read(connfd,read_sum,33); // read CHECKSUM
-    printf("receive checksum: %s\n",read_sum);
+    //printf("receive checksum: %s\n",read_sum);
     read(connfd,buffer,size);   // read file content
     // match checksum
     char match_sum[33]; bzero(match_sum,33);
     strncpy(match_sum,create_checksum(buffer),33);
-    printf("create checksum: %s\n",match_sum);
+    //printf("create checksum: %s\n",match_sum);
     if(strcmp(read_sum,match_sum)){
       die("checksum doesn't match.","rejecting file transmit");
     }
+    printf("Checksum matches\n");
     FILE *file = fopen(filename,"w+");
     if(!file) die("error open","cannot write");
     fprintf(file,"%s",buffer);  // write to file
@@ -311,7 +332,8 @@ void file_server(int connfd, int lru_size) {
     write(connfd,"OKC",10);     // write OK
     if(lru_size) {
       save_cache(filename,buffer,size);
-      printf("save to LRU cache.\n")
+      printf("save to LRU cache.\n");
+      print_lru();
     } else{
       printf("EOF. PUT complete. terminating connection\n"); exit(0);
     }
@@ -319,50 +341,52 @@ void file_server(int connfd, int lru_size) {
   else if (strcmp(msg,"GETC\n")==0){
     if(lru_size){  // save to cache
       lru_node * file_node = find_LRU(filename);
-      if(file_LRU){ // found in cache
+      if(file_node){ // found in cache
         n++;file_node->num = n;  // update num
         write(connfd,"OKC",10); printf("OKC found in cache\n");
         char size[256];
-        sprintf(size,"%d",length);  // cast LENGTH to char
+        sprintf(size,"%d",file_node->length);  // cast LENGTH to char
         write(connfd,size,256);    // write SIZE
         char sum[33]; bzero(sum,33);
-        strncpy(sum,create_checksum(file_node->content),33);
-        printf("check sum: %s\n",sum);
+	//printf("file content: %s, file size:%d \n",file_node->content,file_node->length);
+	strncpy(sum,create_checksum(file_node->content),33);
+        // printf("check sum: %s\n",sum);
         write(connfd,sum,33);     // send check sum
         write(connfd,file_node->content,file_node->length); // write CONTENT
-        printf("sending file from cache complete.");
+	print_lru();
+	printf("sending file from cache complete.");
       } else {
         write(connfd,"NOT",10);
         die(filename,"didn't find file in LRU cache. terminating.");
       }
     } else {    
-    FILE * readfile = fopen(filename,"r");
-    if(!readfile) {
-      write(connfd,"NOT",10);
-      die(filename,"cannot found file in server");
+      FILE * readfile = fopen(filename,"r");
+      if(!readfile) {
+	write(connfd,"NOT",10);
+	die(filename,"cannot found file in server");
+      }
+      write(connfd,"OKC",10);           // write OK
+      printf("OKC\n");
+      fseek(readfile,0,SEEK_END);
+      int length = ftell(readfile);
+      char size[256];
+      sprintf(size,"%d",length);
+      write(connfd,size,256);  // write file size 
+      char content[length];
+      char buffer[1024];
+      fgets(buffer,sizeof(buffer),readfile);
+      strcpy(content,buffer);
+      while(fgets(buffer,sizeof(buffer),readfile)){
+	strcat(content,buffer);
+      }
+      fclose(readfile);
+      char sum[33]; bzero(sum,33);
+      strncpy(sum,create_checksum(content),33);
+      //printf("check sum: %s\n",sum);
+      write(connfd,sum,33);           // write CHECKSUM
+      write(connfd,content,length);  // write file content
+      printf("EOF. GETC complete. terminating connection\n"); exit(0); 
     }
-    write(connfd,"OK",10);           // write OK
-    printf("OK\n");
-    fseek(readfile,0,SEEK_END);
-    int length = ftell(readfile);
-    char size[256];
-    sprintf(size,"%d",length);
-    write(connfd,size,256);  // write file size 
-    char content[length];
-    char buffer[1024];
-    fgets(buffer,sizeof(buffer),readfile);
-    strcpy(content,buffer);
-    while(fgets(buffer,sizeof(buffer),readfile)){
-      strcat(content,buffer);
-    }
-    fclose(readfile);
-    char sum[33]; bzero(sum,33);
-    strncpy(sum,create_checksum(content),33);
-    printf("check sum: %s\n",sum);
-    write(connfd,sum,33);           // write CHECKSUM
-    write(connfd,content,length);  // write file content
-    printf("EOF. GETC complete. terminating connection\n"); exit(0); 
-  }
   }
   else die(msg,"command not recognized");
 }
@@ -386,11 +410,12 @@ int main(int argc, char **argv) {
     while ((opt = getopt(argc, argv, "hl:p:")) != -1) {
         switch(opt) {
           case 'h': help(argv[0]); break;
-          case 'l': lru_size = atoi(argv[0]); break;
+          case 'l': lru_size = atoi(optarg); break;
           case 'p': port = atoi(optarg); break;
         }
     }
-
+    
+    //printf("%d\n",lru_size);
     /* open a socket, and start handling requests */
     int fd = open_server_socket(port);
     handle_requests(fd, file_server, lru_size);
