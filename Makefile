@@ -1,10 +1,10 @@
 # Files to compile that don't have a main() function
-CCFILES = team support
+CFILES = team support
 
 # Files to compile that do have a main() function
-TARGETS = bench multikeybench
+TARGETS = client server
 
-# Use 64-bit compilation
+# Sunlab OpenSSL is 64-bit only!
 BITS = 64
 
 # Directory names
@@ -13,14 +13,14 @@ output_folder := $(shell mkdir -p $(ODIR))
 
 # Names of files that the compiler generates
 EXEFILES  = $(patsubst %, $(ODIR)/%,    $(TARGETS))
-OFILES    = $(patsubst %, $(ODIR)/%.o,  $(CCFILES))
+OFILES    = $(patsubst %, $(ODIR)/%.o,  $(CFILES))
 EXEOFILES = $(patsubst %, $(ODIR)/%.o,  $(TARGETS))
-DEPS      = $(patsubst %, $(ODIR)/%.d,  $(CCFILES) $(TARGETS))
+DEPS      = $(patsubst %, $(ODIR)/%.d,  $(CFILES) $(TARGETS))
 
 # Use gcc
-CXX = g++
-CXXFLAGS = -MMD -O2 -m$(BITS) -ggdb -std=c++11 -O2
-LDFLAGS = -m$(BITS) -pthread
+CC = gcc
+CFLAGS = -MMD -O2 -m$(BITS) -ggdb -D_GNU_SOURCE
+LDFLAGS = -m$(BITS) -ldl -lcrypto -lssl
 
 # Best to be safe...
 .DEFAULT_GOAL = all
@@ -31,14 +31,14 @@ LDFLAGS = -m$(BITS) -pthread
 all: $(EXEFILES)
 
 # Rules for building object files
-$(ODIR)/%.o: %.cc
-	@echo "[CXX] $< --> $@"
-	@$(CXX) $< -o $@ -c $(CXXFLAGS)
+$(ODIR)/%.o: %.c
+	@echo "[CC] $< --> $@"
+	@$(CC) $< -o $@ -c $(CFLAGS)
 
 # Rules for building executables
 $(ODIR)/%: $(ODIR)/%.o $(OFILES)
 	@echo "[LD] $< --> $@"
-	@$(CXX) $^ -o $@ $(LDFLAGS)
+	@$(CC) $^ -o $@ $(LDFLAGS)
 
 # clean by clobbering the build folder
 clean:
@@ -46,9 +46,12 @@ clean:
 	@rm -rf $(ODIR)
 
 # submit via script
+submit:
+	@echo "Submitting..."
+	/proj/spear0/cse303-submit-p5.pl
 turnin:
 	@echo "Submitting..."
-	/proj/spear0/cse303-submit-p6.pl
+	/proj/spear0/cse303-submit-p5.pl
 
 # Include dependencies
 -include $(DEPS)
